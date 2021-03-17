@@ -39,7 +39,7 @@ variable "debug_use_local_packages" {
 
 variable "lambda_default_runtime" {
   type    = string
-  default = "nodejs12.x"
+  default = "nodejs14.x"
 }
 
 variable "deployment_name" {
