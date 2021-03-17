@@ -40,10 +40,10 @@ module "edge_proxy" {
 
   lambda_at_edge = true
 
-  function_name = random_id.function_name.hex
-  description   = "Managed by Terraform-next.js"
-  handler       = "handler.handler"
-  runtime       = var.lambda_default_runtime
+  function_name             = random_id.function_name.hex
+  description               = "Managed by Terraform Next.js"
+  handler                   = "handler.handler"
+  runtime                   = var.lambda_default_runtime
   role_permissions_boundary = var.lambda_role_permissions_boundary
 
   create_package         = false
@@ -51,21 +51,38 @@ module "edge_proxy" {
 
   cloudwatch_logs_retention_in_days = 30
 
-  tags          = var.tags
+  tags = var.tags
 }
 
 ############
 # CloudFront
 ############
 
+# Managed origin request policy
+# Managed-CORS-S3Origin
+#
+# https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-origin-request-policies.html
+
+data "aws_cloudfront_origin_request_policy" "managed_s3_origin" {
+  id = "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
+}
+
+# Managed cache policy
+# Managed-CachingOptimized
+#
+# https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+data "aws_cloudfront_cache_policy" "managed_brotli" {
+  id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+}
+
 resource "aws_cloudfront_distribution" "distribution" {
-  enabled         = true
-  is_ipv6_enabled = true
-  comment         = "${var.deployment_name} - Main"
-  price_class     = var.cloudfront_price_class
-  aliases         = var.cloudfront_alias_domains
+  enabled             = true
+  is_ipv6_enabled     = true
+  comment             = "${var.deployment_name} - Main"
+  price_class         = var.cloudfront_price_class
+  aliases             = var.cloudfront_alias_domains
   default_root_object = "index"
-  tags            = var.tags
+
 
   # Static deployment S3 bucket
   origin {
@@ -103,6 +120,7 @@ resource "aws_cloudfront_distribution" "distribution" {
 
       dynamic "custom_origin_config" {
         for_each = lookup(origin.value, "custom_origin_config", null) != null ? [true] : []
+
         content {
           http_port                = lookup(origin.value["custom_origin_config"], "http_port", null)
           https_port               = lookup(origin.value["custom_origin_config"], "https_port", null)
@@ -121,16 +139,11 @@ resource "aws_cloudfront_distribution" "distribution" {
     cached_methods   = ["GET", "HEAD"]
     target_origin_id = local.origin_id_static_deployment
 
-    forwarded_values {
-      query_string = true
-
-      cookies {
-        forward = "all"
-      }
-    }
-
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
+
+    origin_request_policy_id = var.cloudfront_origin_request_policy_id
+    cache_policy_id          = var.cloudfront_cache_policy_id
 
     lambda_function_association {
       event_type   = "origin-request"
@@ -148,21 +161,11 @@ resource "aws_cloudfront_distribution" "distribution" {
       cached_methods   = ordered_cache_behavior.value["cached_methods"]
       target_origin_id = ordered_cache_behavior.value["target_origin_id"]
 
-      min_ttl                = ordered_cache_behavior.value["min_ttl"]
-      default_ttl            = ordered_cache_behavior.value["default_ttl"]
-      max_ttl                = ordered_cache_behavior.value["max_ttl"]
       compress               = ordered_cache_behavior.value["compress"]
       viewer_protocol_policy = ordered_cache_behavior.value["viewer_protocol_policy"]
 
-      dynamic "forwarded_values" {
-        for_each = lookup(ordered_cache_behavior.value, "forwarded_values", null) != null ? [true] : []
-        content {
-          query_string = lookup(ordered_cache_behavior.value["forwarded_values"], "query_string", null)
-          cookies {
-            forward = lookup(lookup(ordered_cache_behavior.value["forwarded_values"], "cookies", null), "forward", null)
-          }
-        }
-      }
+      origin_request_policy_id = ordered_cache_behavior.value["origin_request_policy_id"]
+      cache_policy_id          = ordered_cache_behavior.value["cache_policy_id"]
     }
   }
 
@@ -173,19 +176,11 @@ resource "aws_cloudfront_distribution" "distribution" {
     cached_methods   = ["GET", "HEAD"]
     target_origin_id = local.origin_id_static_deployment
 
-    forwarded_values {
-      query_string = false
-
-      cookies {
-        forward = "none"
-      }
-    }
-
     compress               = true
     viewer_protocol_policy = "redirect-to-https"
-    min_ttl                = 0
-    default_ttl            = 86400
-    max_ttl                = 31536000
+
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.managed_s3_origin.id
+    cache_policy_id          = data.aws_cloudfront_cache_policy.managed_brotli.id
   }
 
   # Custom error response when a doc is not found in S3 (returns 403)
@@ -209,4 +204,6 @@ resource "aws_cloudfront_distribution" "distribution" {
       restriction_type = "none"
     }
   }
+
+  tags = var.tags
 }
